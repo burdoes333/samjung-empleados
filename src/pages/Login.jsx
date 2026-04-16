@@ -8,23 +8,25 @@ export default function Login({ onLogin }) {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    if(!nombre.trim()||!pin.trim()) return setError("Ingresa tu nombre y PIN");
-    setLoading(true);
-    setError("");
-    const { data, error } = await supabase
-      .from("empleados")
-      .select("*")
-      .ilike("nombre", nombre.trim())
-      .eq("pin", pin.trim())
-      .single();
-    if(error||!data){
-      setError("Nombre o PIN incorrecto");
-      setLoading(false);
-      return;
-    }
-    onLogin(data);
+  if(!nombre.trim()||!pin.trim()) return setError("Ingresa tu nombre y PIN");
+  setLoading(true);
+  setError("");
+  const { data, error } = await supabase
+    .from("empleados")
+    .select("*")
+    .ilike("nombre", nombre.trim())
+    .eq("pin", pin.trim());
+  
+  console.log("data:", data, "error:", error);
+  
+  if(error||!data||data.length===0){
+    setError("Nombre o PIN incorrecto");
     setLoading(false);
-  };
+    return;
+  }
+  onLogin(data[0]);
+  setLoading(false);
+};
 
   const handlePinClick = (digit) => {
     if(pin.length < 6) setPin(prev => prev + digit);
