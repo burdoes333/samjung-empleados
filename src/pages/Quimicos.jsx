@@ -236,42 +236,53 @@ export default function Quimicos({ empleado }) {
         </div>
       )}
 
-      {/* Historique groupé par date */}
+      {/* Historique groupé par date - une seule carte par jour */}
       {usos.length===0 ? (
         <div style={{textAlign:"center",padding:40,color:"#aaa",fontSize:13}}>Sin registros aún 🧪</div>
-      ) : Object.entries(usosPorFecha).map(([fecha, items])=>(
-        <div key={fecha} style={{marginBottom:16}}>
-          <div style={{fontSize:12,fontWeight:600,color:"#1a3a6b",marginBottom:8,padding:"4px 0",borderBottom:"0.5px solid #eee"}}>📅 {fmtFecha(fecha)}</div>
-          {items.map(u=>(
-            <div key={u.id} style={{background:"#fff",borderRadius:12,padding:12,marginBottom:8,boxShadow:"0 1px 6px rgba(0,0,0,0.06)"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{fontSize:14,fontWeight:500}}>🧪 {u.quimico}</div>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{fontSize:13,fontWeight:500,color:"#1a3a6b"}}>{u.cantidad} {u.unidad}</div>
-                  <button onClick={()=>deleteUso(u.id)} style={{padding:"3px 8px",borderRadius:6,border:"none",background:"#fcebeb",color:"#a32d2d",fontSize:11,cursor:"pointer"}}>🗑️</button>
-                </div>
-              </div>
-              {u.nota&&<div style={{fontSize:12,color:"#555",marginTop:4}}>{u.nota}</div>}
-              {((u.fotos_fosa1||[]).length>0||(u.fotos_fosa2||[]).length>0)&&(
-                <div style={{marginTop:8,display:"flex",gap:12,flexWrap:"wrap"}}>
-                  {(u.fotos_fosa1||[]).length>0&&(
-                    <div>
-                      <div style={{fontSize:10,color:"#888",marginBottom:4}}>Fosa 1</div>
-                      <div style={{display:"flex",gap:6}}>{(u.fotos_fosa1||[]).map((f,i)=><img key={i} src={f} alt="" style={{width:60,height:60,objectFit:"cover",borderRadius:6,border:"0.5px solid #ddd"}}/>)}</div>
-                    </div>
-                  )}
-                  {(u.fotos_fosa2||[]).length>0&&(
-                    <div>
-                      <div style={{fontSize:10,color:"#888",marginBottom:4}}>Fosa 2</div>
-                      <div style={{display:"flex",gap:6}}>{(u.fotos_fosa2||[]).map((f,i)=><img key={i} src={f} alt="" style={{width:60,height:60,objectFit:"cover",borderRadius:6,border:"0.5px solid #ddd"}}/>)}</div>
-                    </div>
-                  )}
-                </div>
-              )}
+      ) : Object.entries(usosPorFecha).map(([fecha, items])=>{
+        // Récupérer photos et nota du premier item (ils sont partagés)
+        const fosa1 = items[0]?.fotos_fosa1 || [];
+        const fosa2 = items[0]?.fotos_fosa2 || [];
+        const notaDia = items[0]?.nota || "";
+        return (
+          <div key={fecha} style={{background:"#fff",borderRadius:12,padding:14,marginBottom:12,boxShadow:"0 1px 8px rgba(0,0,0,0.07)",border:"0.5px solid #eee"}}>
+            {/* Header date */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,paddingBottom:8,borderBottom:"0.5px solid #f0f0f0"}}>
+              <div style={{fontSize:13,fontWeight:600,color:"#1a3a6b"}}>📅 {fmtFecha(fecha)}</div>
+              <button onClick={()=>{ if(!window.confirm("¿Eliminar todos los registros de este día?")) return; items.forEach(u=>deleteUso(u.id)); }} style={{padding:"3px 8px",borderRadius:6,border:"none",background:"#fcebeb",color:"#a32d2d",fontSize:11,cursor:"pointer"}}>🗑️ Eliminar día</button>
             </div>
-          ))}
-        </div>
-      ))}
+            {/* Productos del día */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:12}}>
+              {items.map(u=>(
+                <div key={u.id} style={{background:"#f0f4ff",borderRadius:8,padding:"10px 12px",textAlign:"center",border:"0.5px solid #dce6fb"}}>
+                  <div style={{fontSize:11,color:"#888",marginBottom:2}}>🧪 {u.quimico}</div>
+                  <div style={{fontSize:18,fontWeight:700,color:"#1a3a6b"}}>{u.cantidad}</div>
+                  <div style={{fontSize:11,color:"#aaa"}}>{u.unidad}</div>
+                </div>
+              ))}
+            </div>
+            {/* Photos Fosa 1 et 2 - une seule fois */}
+            {(fosa1.length>0||fosa2.length>0)&&(
+              <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:notaDia?10:0}}>
+                {fosa1.length>0&&(
+                  <div>
+                    <div style={{fontSize:10,color:"#888",marginBottom:4,fontWeight:500}}>Fosa 1</div>
+                    <div style={{display:"flex",gap:6}}>{fosa1.map((f,i)=><img key={i} src={f} alt="" style={{width:70,height:70,objectFit:"cover",borderRadius:8,border:"0.5px solid #ddd"}}/>)}</div>
+                  </div>
+                )}
+                {fosa2.length>0&&(
+                  <div>
+                    <div style={{fontSize:10,color:"#888",marginBottom:4,fontWeight:500}}>Fosa 2</div>
+                    <div style={{display:"flex",gap:6}}>{fosa2.map((f,i)=><img key={i} src={f} alt="" style={{width:70,height:70,objectFit:"cover",borderRadius:8,border:"0.5px solid #ddd"}}/>)}</div>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Nota */}
+            {notaDia&&<div style={{fontSize:12,color:"#555",marginTop:6,padding:"6px 10px",background:"#f9f9f9",borderRadius:6}}>{notaDia}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }
