@@ -215,6 +215,7 @@ export default function Quimicos({ empleado }) {
           </div>
           <div style={{fontSize:11,color:"#888"}}>📅 {fmtFecha(u.fecha)}{u.planta?` · 📍 ${u.planta}`:""}</div>
           {u.nota&&<div style={{fontSize:12,color:"#555",marginTop:4}}>{u.nota}</div>}
+          <button onClick={async()=>{ if(!window.confirm("¿Eliminar este registro?")) return; const {error}=await supabase.from("empleados_quimicos_uso").delete().eq("id",u.id); if(!error) setUsos(prev=>prev.filter(x=>x.id!==u.id)); }} style={{marginTop:8,padding:"4px 10px",borderRadius:6,border:"none",background:"#fcebeb",color:"#a32d2d",fontSize:11,cursor:"pointer"}}>🗑️ Eliminar</button>
           {/* Fotos */}
           {((u.fotos_fosa1||[]).length>0||(u.fotos_fosa2||[]).length>0)&&(
             <div style={{marginTop:8,display:"flex",gap:12,flexWrap:"wrap"}}>
