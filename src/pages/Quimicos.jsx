@@ -9,7 +9,14 @@ export default function Quimicos({ empleado }) {
   const [showAddQuimico, setShowAddQuimico] = useState(false);
   const [uploadingFosa1, setUploadingFosa1] = useState(false);
   const [uploadingFosa2, setUploadingFosa2] = useState(false);
-  const [form, setForm] = useState({ quimico:"", cantidad:"", unidad:"L", nota:"", fotos_fosa1:[], fotos_fosa2:[] });
+  const [saving, setSaving] = useState(false);
+
+  // Formulaire multi-produits
+  const [cantidades, setCantidades] = useState({});
+  const [nota, setNota] = useState("");
+  const [fotosFosa1, setFotosFosa1] = useState([]);
+  const [fotosFosa2, setFotosFosa2] = useState([]);
+
   const [newQuimico, setNewQuimico] = useState({ nombre:"", unidad:"L", stock_actual:0 });
 
   useEffect(() => { fetchAll(); }, []);
@@ -18,7 +25,7 @@ export default function Quimicos({ empleado }) {
     setLoading(true);
     const [{ data: l }, { data: u }] = await Promise.all([
       supabase.from("empleados_quimicos_lista").select("*").order("nombre"),
-      supabase.from("empleados_quimicos_uso").select("*").eq("empleado_id", empleado.id).order("created_at", { ascending: false }).limit(30),
+      supabase.from("empleados_quimicos_uso").select("*").eq("empleado_id", empleado.id).order("created_at", { ascending: false }).limit(50),
     ]);
     if(l) setLista(l);
     if(u) setUsos(u);
@@ -36,37 +43,11 @@ export default function Quimicos({ empleado }) {
     setLista(prev => prev.map(q => q.nombre === quimicoNombre ? {...q, stock_actual: stockNuevo} : q));
   };
 
-  const saveUso = async () => {
-    if(!form.quimico || !form.cantidad) return alert("Completa los campos");
-    const quimicoInfo = lista.find(l => l.nombre === form.quimico);
-    const { data, error } = await supabase.from("empleados_quimicos_uso").insert([{
-      empleado_id: empleado.id,
-      quimico: form.quimico,
-      cantidad: parseFloat(form.cantidad),
-      unidad: form.unidad,
-      nota: form.nota,
-      planta: empleado.planta || "",
-      fecha: new Date().toISOString().slice(0,10),
-      fotos_fosa1: form.fotos_fosa1,
-      fotos_fosa2: form.fotos_fosa2,
-    }]).select();
-    if(!error){
-      // Déduire du stock
-      if(quimicoInfo) {
-        const newStock = Math.max(0, (quimicoInfo.stock_actual||0) - parseFloat(form.cantidad));
-        await updateStock(form.quimico, newStock);
-      }
-      setUsos(prev=>[data[0],...prev]);
-      setForm({quimico:"",cantidad:"",unidad:"L",nota:"",fotos_fosa1:[],fotos_fosa2:[]});
-      setShowNew(false);
-    } else alert("Error: "+JSON.stringify(error));
-  };
-
-  const uploadFoto = async (file, fosa, setUploading) => {
+  const uploadFoto = async (file, fosa) => {
     if(!file || !file.type.startsWith("image/")) return;
-    const currentFotos = fosa === 1 ? form.fotos_fosa1 : form.fotos_fosa2;
-    if(currentFotos.length >= 2) return alert("Máximo 2 fotos por fosa");
-    setUploading(true);
+    const current = fosa === 1 ? fotosFosa1 : fotosFosa2;
+    if(current.length >= 2) return alert("Máximo 2 fotos por fosa");
+    fosa === 1 ? setUploadingFosa1(true) : setUploadingFosa2(true);
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
@@ -76,24 +57,66 @@ export default function Quimicos({ empleado }) {
         const { error } = await supabase.storage.from("quimicos-fotos").upload(filename, blob, { contentType: file.type, upsert: true });
         if(error) throw error;
         const { data: { publicUrl } } = supabase.storage.from("quimicos-fotos").getPublicUrl(filename);
-        if(fosa === 1) setForm(prev => ({...prev, fotos_fosa1: [...prev.fotos_fosa1, publicUrl]}));
-        else setForm(prev => ({...prev, fotos_fosa2: [...prev.fotos_fosa2, publicUrl]}));
+        if(fosa === 1) setFotosFosa1(prev => [...prev, publicUrl]);
+        else setFotosFosa2(prev => [...prev, publicUrl]);
       } catch(e) { alert("Error al subir foto: " + e.message); }
-      setUploading(false);
+      fosa === 1 ? setUploadingFosa1(false) : setUploadingFosa2(false);
     };
     reader.readAsDataURL(file);
   };
 
   const removeFoto = (fosa, idx) => {
-    if(fosa === 1) setForm(prev => ({...prev, fotos_fosa1: prev.fotos_fosa1.filter((_,i)=>i!==idx)}));
-    else setForm(prev => ({...prev, fotos_fosa2: prev.fotos_fosa2.filter((_,i)=>i!==idx)}));
+    if(fosa === 1) setFotosFosa1(prev => prev.filter((_,i)=>i!==idx));
+    else setFotosFosa2(prev => prev.filter((_,i)=>i!==idx));
+  };
+
+  const saveUso = async () => {
+    // Vérifie qu'au moins un produit a une quantité
+    const productosUsados = lista.filter(q => cantidades[q.nombre] && parseFloat(cantidades[q.nombre]) > 0);
+    if(productosUsados.length === 0) return alert("Ingresa al menos una cantidad");
+
+    setSaving(true);
+    const fecha = new Date().toISOString().slice(0,10);
+    const inserts = productosUsados.map(q => ({
+      empleado_id: empleado.id,
+      quimico: q.nombre,
+      cantidad: parseFloat(cantidades[q.nombre]),
+      unidad: q.unidad,
+      nota: nota,
+      planta: empleado.planta || "",
+      fecha,
+      fotos_fosa1: fotosFosa1,
+      fotos_fosa2: fotosFosa2,
+    }));
+
+    const { data, error } = await supabase.from("empleados_quimicos_uso").insert(inserts).select();
+    if(!error){
+      // Déduire du stock pour chaque produit
+      for(const q of productosUsados) {
+        const quimicoInfo = lista.find(l => l.nombre === q.nombre);
+        if(quimicoInfo) {
+          const newStock = Math.max(0, (quimicoInfo.stock_actual||0) - parseFloat(cantidades[q.nombre]));
+          await updateStock(q.nombre, newStock);
+        }
+      }
+      setUsos(prev=>[...data.reverse(),...prev]);
+      setCantidades({}); setNota(""); setFotosFosa1([]); setFotosFosa2([]);
+      setShowNew(false);
+    } else alert("Error: "+JSON.stringify(error));
+    setSaving(false);
+  };
+
+  const deleteUso = async (id) => {
+    if(!window.confirm("¿Eliminar este registro?")) return;
+    const { error } = await supabase.from("empleados_quimicos_uso").delete().eq("id", id);
+    if(!error) setUsos(prev => prev.filter(x => x.id !== id));
   };
 
   const fmtFecha = (f) => { if(!f) return ""; const [y,m,d]=f.split("-"); return `${d}/${m}/${y}`; };
 
   const inp = {width:"100%",padding:"10px",borderRadius:8,border:"0.5px solid #ddd",fontSize:13,boxSizing:"border-box"};
 
-  const renderFotosPicker = (fosa, fotos, uploading, setUploading) => (
+  const renderFotosPicker = (fosa, fotos, uploading) => (
     <div style={{marginBottom:12}}>
       <label style={{fontSize:11,color:"#888",display:"block",marginBottom:6}}>📸 Fosa {fosa} (máx. 2 fotos)</label>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -106,12 +129,20 @@ export default function Quimicos({ empleado }) {
         {fotos.length < 2 && (
           <label style={{width:80,height:80,border:"1.5px dashed #b5d4f4",borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",background:"#f9f9ff",color:"#1a3a6b",fontSize:10,gap:2}}>
             {uploading ? <span>⏳</span> : <><span style={{fontSize:20}}>+</span><span>Foto</span></>}
-            <input type="file" accept="image/*" style={{display:"none"}} disabled={uploading} onChange={e=>{ if(e.target.files[0]) uploadFoto(e.target.files[0], fosa, setUploading); e.target.value=""; }}/>
+            <input type="file" accept="image/*" style={{display:"none"}} disabled={uploading} onChange={e=>{ if(e.target.files[0]) uploadFoto(e.target.files[0], fosa); e.target.value=""; }}/>
           </label>
         )}
       </div>
     </div>
   );
+
+  // Grouper les usos par fecha pour l'affichage
+  const usosPorFecha = usos.reduce((acc, u) => {
+    const key = u.fecha || "Sin fecha";
+    if(!acc[key]) acc[key] = [];
+    acc[key].push(u);
+    return acc;
+  }, {});
 
   if(loading) return <div style={{padding:40,textAlign:"center",color:"#888"}}>⏳</div>;
 
@@ -123,18 +154,17 @@ export default function Quimicos({ empleado }) {
       {lista.length > 0 && (
         <div style={{background:"#f0f4ff",borderRadius:10,padding:12,marginBottom:14,border:"0.5px solid #b5d4f4"}}>
           <div style={{fontSize:11,fontWeight:500,color:"#1a3a6b",marginBottom:8}}>📦 Stock actual</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8}}>
             {lista.map(q=>(
               <div key={q.id} style={{background:"#fff",borderRadius:8,padding:"10px 12px",textAlign:"center",border:"0.5px solid #dce6fb"}}>
                 <div style={{fontSize:11,color:"#888",marginBottom:2}}>{q.nombre}</div>
-                <div style={{fontSize:16,fontWeight:600,color:(q.stock_actual||0)<10?"#c0392b":"#1a3a6b"}}>{q.stock_actual||0}</div>
-                <div style={{fontSize:10,color:"#aaa"}}>{q.unidad}</div>
-                {/* Editar stock */}
+                <div style={{fontSize:18,fontWeight:600,color:(q.stock_actual||0)<10?"#c0392b":"#1a3a6b"}}>{q.stock_actual||0}</div>
+                <div style={{fontSize:10,color:"#aaa",marginBottom:4}}>{q.unidad}</div>
                 <input
                   type="number"
                   defaultValue={q.stock_actual||0}
-                  onBlur={e=>{ const v=parseFloat(e.target.value)||0; if(v!==q.stock_actual) updateStock(q.nombre,v); }}
-                  style={{width:"100%",padding:"4px 6px",borderRadius:6,border:"0.5px solid #ddd",fontSize:11,textAlign:"center",marginTop:4,boxSizing:"border-box"}}
+                  onBlur={e=>{ const v=parseFloat(e.target.value)||0; if(v!==(q.stock_actual||0)) updateStock(q.nombre,v); }}
+                  style={{width:"100%",padding:"4px 6px",borderRadius:6,border:"0.5px solid #ddd",fontSize:11,textAlign:"center",boxSizing:"border-box"}}
                   title="Editar stock"
                 />
               </div>
@@ -172,71 +202,74 @@ export default function Quimicos({ empleado }) {
 
       {showNew&&(
         <div style={{background:"#fff",borderRadius:10,padding:14,marginBottom:14,border:"0.5px solid #ddd",boxShadow:"0 1px 8px rgba(0,0,0,0.06)"}}>
-          <div style={{fontSize:13,fontWeight:500,marginBottom:12}}>Registrar uso de químico</div>
+          <div style={{fontSize:13,fontWeight:500,marginBottom:12}}>Registrar uso del día</div>
 
-          <label style={{fontSize:11,color:"#888",display:"block",marginBottom:4}}>Químico</label>
-          <select value={form.quimico} onChange={e=>{ const q=lista.find(l=>l.nombre===e.target.value); setForm({...form,quimico:e.target.value,unidad:q?.unidad||"L"}); }} style={{...inp,marginBottom:10}}>
-            <option value="">Seleccionar...</option>
-            {lista.map(q=><option key={q.id} value={q.nombre}>{q.nombre} (stock: {q.stock_actual||0} {q.unidad})</option>)}
-          </select>
-
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-            <div>
-              <label style={{fontSize:11,color:"#888",display:"block",marginBottom:4}}>Cantidad utilizada</label>
-              <input type="number" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})} placeholder="0" style={inp}/>
-            </div>
-            <div>
-              <label style={{fontSize:11,color:"#888",display:"block",marginBottom:4}}>Unidad</label>
-              <input value={form.unidad} readOnly style={{...inp,background:"#f5f5f5"}}/>
-            </div>
+          {/* Cantidades por producto */}
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:11,color:"#888",display:"block",marginBottom:8}}>Cantidades utilizadas</label>
+            {lista.map(q=>(
+              <div key={q.id} style={{display:"grid",gridTemplateColumns:"1fr 100px 50px",gap:8,alignItems:"center",marginBottom:8}}>
+                <div style={{fontSize:13,fontWeight:500}}>{q.nombre}</div>
+                <input
+                  type="number"
+                  value={cantidades[q.nombre]||""}
+                  onChange={e=>setCantidades(prev=>({...prev,[q.nombre]:e.target.value}))}
+                  placeholder="0"
+                  style={{...inp,padding:"8px 10px"}}
+                />
+                <div style={{fontSize:12,color:"#888",textAlign:"center"}}>{q.unidad}</div>
+              </div>
+            ))}
           </div>
 
           {/* Fotos Fosa 1 y Fosa 2 */}
-          {renderFotosPicker(1, form.fotos_fosa1, uploadingFosa1, setUploadingFosa1)}
-          {renderFotosPicker(2, form.fotos_fosa2, uploadingFosa2, setUploadingFosa2)}
+          {renderFotosPicker(1, fotosFosa1, uploadingFosa1)}
+          {renderFotosPicker(2, fotosFosa2, uploadingFosa2)}
 
           <label style={{fontSize:11,color:"#888",display:"block",marginBottom:4}}>Nota (opcional)</label>
-          <textarea value={form.nota} onChange={e=>setForm({...form,nota:e.target.value})} rows={2} placeholder="Observaciones..." style={{...inp,marginBottom:10,resize:"none"}}/>
+          <textarea value={nota} onChange={e=>setNota(e.target.value)} rows={2} placeholder="Observaciones..." style={{...inp,marginBottom:12,resize:"none"}}/>
 
           <div style={{display:"flex",gap:8}}>
-            <button onClick={saveUso} style={{flex:1,padding:"10px",borderRadius:8,border:"none",background:"#1a3a6b",color:"#fff",fontSize:13,cursor:"pointer",fontWeight:500}}>Guardar</button>
-            <button onClick={()=>{setShowNew(false);setForm({quimico:"",cantidad:"",unidad:"L",nota:"",fotos_fosa1:[],fotos_fosa2:[]});}} style={{flex:1,padding:"10px",borderRadius:8,border:"0.5px solid #ddd",background:"#fff",fontSize:13,cursor:"pointer"}}>Cancelar</button>
+            <button onClick={saveUso} disabled={saving} style={{flex:1,padding:"10px",borderRadius:8,border:"none",background:saving?"#888":"#1a3a6b",color:"#fff",fontSize:13,cursor:saving?"not-allowed":"pointer",fontWeight:500}}>{saving?"Guardando...":"Guardar"}</button>
+            <button onClick={()=>{setShowNew(false);setCantidades({});setNota("");setFotosFosa1([]);setFotosFosa2([]);}} style={{flex:1,padding:"10px",borderRadius:8,border:"0.5px solid #ddd",background:"#fff",fontSize:13,cursor:"pointer"}}>Cancelar</button>
           </div>
         </div>
       )}
 
+      {/* Historique groupé par date */}
       {usos.length===0 ? (
         <div style={{textAlign:"center",padding:40,color:"#aaa",fontSize:13}}>Sin registros aún 🧪</div>
-      ) : usos.map(u=>(
-        <div key={u.id} style={{background:"#fff",borderRadius:12,padding:14,marginBottom:10,boxShadow:"0 1px 8px rgba(0,0,0,0.06)"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-            <div style={{fontSize:14,fontWeight:500}}>🧪 {u.quimico}</div>
-            <div style={{fontSize:13,fontWeight:500,color:"#1a3a6b"}}>{u.cantidad} {u.unidad}</div>
-          </div>
-          <div style={{fontSize:11,color:"#888"}}>📅 {fmtFecha(u.fecha)}{u.planta?` · 📍 ${u.planta}`:""}</div>
-          {u.nota&&<div style={{fontSize:12,color:"#555",marginTop:4}}>{u.nota}</div>}
-          <button onClick={async()=>{ if(!window.confirm("¿Eliminar este registro?")) return; const {error}=await supabase.from("empleados_quimicos_uso").delete().eq("id",u.id); if(!error) setUsos(prev=>prev.filter(x=>x.id!==u.id)); }} style={{marginTop:8,padding:"4px 10px",borderRadius:6,border:"none",background:"#fcebeb",color:"#a32d2d",fontSize:11,cursor:"pointer"}}>🗑️ Eliminar</button>
-          {/* Fotos */}
-          {((u.fotos_fosa1||[]).length>0||(u.fotos_fosa2||[]).length>0)&&(
-            <div style={{marginTop:8,display:"flex",gap:12,flexWrap:"wrap"}}>
-              {(u.fotos_fosa1||[]).length>0&&(
-                <div>
-                  <div style={{fontSize:10,color:"#888",marginBottom:4}}>Fosa 1</div>
-                  <div style={{display:"flex",gap:6}}>
-                    {(u.fotos_fosa1||[]).map((f,i)=><img key={i} src={f} alt="" style={{width:60,height:60,objectFit:"cover",borderRadius:6,border:"0.5px solid #ddd"}}/>)}
-                  </div>
+      ) : Object.entries(usosPorFecha).map(([fecha, items])=>(
+        <div key={fecha} style={{marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#1a3a6b",marginBottom:8,padding:"4px 0",borderBottom:"0.5px solid #eee"}}>📅 {fmtFecha(fecha)}</div>
+          {items.map(u=>(
+            <div key={u.id} style={{background:"#fff",borderRadius:12,padding:12,marginBottom:8,boxShadow:"0 1px 6px rgba(0,0,0,0.06)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontSize:14,fontWeight:500}}>🧪 {u.quimico}</div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{fontSize:13,fontWeight:500,color:"#1a3a6b"}}>{u.cantidad} {u.unidad}</div>
+                  <button onClick={()=>deleteUso(u.id)} style={{padding:"3px 8px",borderRadius:6,border:"none",background:"#fcebeb",color:"#a32d2d",fontSize:11,cursor:"pointer"}}>🗑️</button>
                 </div>
-              )}
-              {(u.fotos_fosa2||[]).length>0&&(
-                <div>
-                  <div style={{fontSize:10,color:"#888",marginBottom:4}}>Fosa 2</div>
-                  <div style={{display:"flex",gap:6}}>
-                    {(u.fotos_fosa2||[]).map((f,i)=><img key={i} src={f} alt="" style={{width:60,height:60,objectFit:"cover",borderRadius:6,border:"0.5px solid #ddd"}}/>)}
-                  </div>
+              </div>
+              {u.nota&&<div style={{fontSize:12,color:"#555",marginTop:4}}>{u.nota}</div>}
+              {((u.fotos_fosa1||[]).length>0||(u.fotos_fosa2||[]).length>0)&&(
+                <div style={{marginTop:8,display:"flex",gap:12,flexWrap:"wrap"}}>
+                  {(u.fotos_fosa1||[]).length>0&&(
+                    <div>
+                      <div style={{fontSize:10,color:"#888",marginBottom:4}}>Fosa 1</div>
+                      <div style={{display:"flex",gap:6}}>{(u.fotos_fosa1||[]).map((f,i)=><img key={i} src={f} alt="" style={{width:60,height:60,objectFit:"cover",borderRadius:6,border:"0.5px solid #ddd"}}/>)}</div>
+                    </div>
+                  )}
+                  {(u.fotos_fosa2||[]).length>0&&(
+                    <div>
+                      <div style={{fontSize:10,color:"#888",marginBottom:4}}>Fosa 2</div>
+                      <div style={{display:"flex",gap:6}}>{(u.fotos_fosa2||[]).map((f,i)=><img key={i} src={f} alt="" style={{width:60,height:60,objectFit:"cover",borderRadius:6,border:"0.5px solid #ddd"}}/>)}</div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          )}
+          ))}
         </div>
       ))}
     </div>
